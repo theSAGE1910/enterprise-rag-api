@@ -1,4 +1,8 @@
-from fastapi import FastAPI, Depends, HTTPException
+import shutil
+import os
+
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -7,6 +11,7 @@ from dotenv import load_dotenv
 
 from database import get_db
 from models import DocumentChunk
+from ingest import ingest_document
 
 load_dotenv()
 
@@ -14,6 +19,14 @@ app = FastAPI(
     title="Enterprise RAG API",
     description="Knowledge base search API using pgvector and LangChain",
     version="0.1.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"], # Allows all methods (GET, POST, etc.)
+    allow_headers=["*"],
 )
 
 class QueryRequest(BaseModel):
@@ -31,6 +44,21 @@ def read_root():
 @app.get("/health")
 def health_check():
     return {"status": "healthy", "database_connected": True}
+
+@app.post("api/v1/upload")
+async def upload_document(file: UploadFile = File(...)):
+    try:
+        os.makedirs("data", exist_ok=True)
+        file_path = os.path.join("data", file.filename)
+
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        await ingest_document(file_path)
+
+        return {"filename": file.filename, "message": "Document vectorized amd saved successfully!"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/v1/query", response_model=QueryResponse)
 async def query_knowledge_base(payload: QueryRequest, db: AsyncSession = Depends(get_db)):
