@@ -3,6 +3,7 @@ import os
 from dotenv import load_dotenv
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_community.document_loaders import PyPDFLoader
 from sqlalchemy.future import select
 
 from database import AsyncSessionLocal
@@ -16,8 +17,16 @@ async def ingest_document(file_path: str):
         print(f"File not found: {file_path}")
         return
     
-    with open(file_path, "r", encoding="utf-8") as f:
-        raw_text = f.read()
+    if file_path.lower().endswith('.pdf'):
+        print("PDF detected. Initializing PyPDFLoader...")
+        loader = PyPDFLoader(file_path)
+        pages = loader.load()
+
+        raw_text = "\n\n".join([page.page_content for page in pages])
+    else:
+        print("Text file detected. Reading directly...")
+        with open(file_path, "r", encoding="utf-8") as f:
+            raw_text = f.read()
 
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=400,
@@ -28,7 +37,7 @@ async def ingest_document(file_path: str):
     chunks = text_splitter.split_text(raw_text)
     print(f"Split document into {len(chunks)} individual chunks.")
 
-    embeddings_engine = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")
+    embeddings_engine = GoogleGenerativeAIEmbeddings(model="gemini-embedding-2-preview")
     
     print("Generating embeddings via Gemini API...")
     vectors = embeddings_engine.embed_documents(chunks)

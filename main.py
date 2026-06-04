@@ -31,6 +31,7 @@ app.add_middleware(
 
 class QueryRequest(BaseModel):
     question: str
+    filename: str | None = None
 
 class QueryResponse(BaseModel):
     query: str
@@ -45,7 +46,7 @@ def read_root():
 def health_check():
     return {"status": "healthy", "database_connected": True}
 
-@app.post("api/v1/upload")
+@app.post("/api/v1/upload")
 async def upload_document(file: UploadFile = File(...)):
     try:
         os.makedirs("data", exist_ok=True)
@@ -56,21 +57,28 @@ async def upload_document(file: UploadFile = File(...)):
 
         await ingest_document(file_path)
 
-        return {"filename": file.filename, "message": "Document vectorized amd saved successfully!"}
+        return {"filename": file.filename, "message": "Document vectorized and saved successfully!"}
     except Exception as e:
+        import traceback
+        traceback.print_exc() # Prints the exact crash log!
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/v1/query", response_model=QueryResponse)
 async def query_knowledge_base(payload: QueryRequest, db: AsyncSession = Depends(get_db)):
     try:
-        embeddings_engine = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")
+        embeddings_engine = GoogleGenerativeAIEmbeddings(model="gemini-embedding-2-preview")
         query_vector = await embeddings_engine.aembed_query(payload.question)
 
-        stmt = (
-            select(DocumentChunk)
-            .order_by(DocumentChunk.embedding.cosine_distance(query_vector))
-            .limit(2)
-        )
+        # Database query
+        stmt = select(DocumentChunk)
+        
+        # METADATA FILTER
+        if payload.filename:
+            stmt = stmt.filter(DocumentChunk.filename == payload.filename)
+
+        # Vector similarity search on the filtered results
+        stmt = stmt.order_by(DocumentChunk.embedding.cosine_distance(query_vector)).limit(2)
+        
         result = await db.execute(stmt)
         matched_chunks = result.scalars().all()
 
