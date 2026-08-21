@@ -1,0 +1,12 @@
+models:
+llm: "gemini-2.5-flash"
+embeddings: "gemini-embedding-2-preview"
+llm_temperature: 0.2
+
+chunking:
+chunk_size: 400
+chunk_overlap: 50
+
+database:
+vector_size: 3072
+table_name: "document_chunks"

@@ -1,108 +1,27 @@
-import shutil
-import os
-
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+import uvicorn
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from dotenv import load_dotenv
 
-from database import get_db
-from models import DocumentChunk
-from ingest import ingest_document
+from src.api.routes import router
 
 load_dotenv()
 
 app = FastAPI(
     title="Enterprise RAG API",
     description="Knowledge base search API using pgvector and LangChain",
-    version="0.1.0"
+    version="0.1.1"
 )
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
-    allow_methods=["*"], # Allows all methods (GET, POST, etc.)
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
-class QueryRequest(BaseModel):
-    question: str
-    filename: str | None = None
+app.include_router(router)
 
-class QueryResponse(BaseModel):
-    query: str
-    retrieved_context: str
-    answer: str
-
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to the Enterprise RAG API!"}
-
-@app.get("/health")
-def health_check():
-    return {"status": "healthy", "database_connected": True}
-
-@app.post("/api/v1/upload")
-async def upload_document(file: UploadFile = File(...)):
-    try:
-        os.makedirs("data", exist_ok=True)
-        file_path = os.path.join("data", file.filename)
-
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-
-        await ingest_document(file_path)
-
-        return {"filename": file.filename, "message": "Document vectorized and saved successfully!"}
-    except Exception as e:
-        import traceback
-        traceback.print_exc() # Prints the exact crash log!
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/v1/query", response_model=QueryResponse)
-async def query_knowledge_base(payload: QueryRequest, db: AsyncSession = Depends(get_db)):
-    try:
-        embeddings_engine = GoogleGenerativeAIEmbeddings(model="gemini-embedding-2-preview")
-        query_vector = await embeddings_engine.aembed_query(payload.question)
-
-        # Database query
-        stmt = select(DocumentChunk)
-        
-        # METADATA FILTER
-        if payload.filename:
-            stmt = stmt.filter(DocumentChunk.filename == payload.filename)
-
-        # Vector similarity search on the filtered results
-        stmt = stmt.order_by(DocumentChunk.embedding.cosine_distance(query_vector)).limit(2)
-        
-        result = await db.execute(stmt)
-        matched_chunks = result.scalars().all()
-
-        if not matched_chunks:
-            raise HTTPException(status_code=404, detail="No relevant context found in database.")
-        
-        context_text = "\n\n".join([chunk.content for chunk in matched_chunks])
-
-        system_prompt = (
-            "You are a secure corporate assistant. Use ONLY the following retrieved business context to answer "
-            "the employee's question. If the answer cannot be found in the context, state clearly that you do "
-            "not possess that information.\n\n"
-            f"--- CONTEXT ---\n{context_text}\n----------------\n\n"
-            f"QUESTION: {payload.question}"
-        )
-
-        llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2)
-        ai_response = await llm.ainvoke(system_prompt)
-
-        return QueryResponse(
-            query=payload.question,
-            retrieved_context=context_text,
-            answer=ai_response.content
-        )
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
